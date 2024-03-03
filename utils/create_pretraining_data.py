@@ -37,6 +37,24 @@ def read_wiki2(filepath=None, seps='.'):
     random.shuffle(paragraphs)  # 将所有段落打乱
     return paragraphs
 
+def read_title(filepath = None, seps= '_!_'):
+    """
+    用于处理标题匹配任务，返回诗词内容与对应标题
+    :param filepath: 读取路径
+    :return content, title
+    """
+
+    with open(filepath, 'r' ,encoding='utf-8') as f:
+        lines = f.readlines()
+    content = []
+    title = []
+    random.shuffle(lines)
+    for line in tqdm(lines, ncols= 80, desc = '## read title'):
+        line = line.strip().split(seps)
+        content.append(line[0])
+        title.append(line[1])
+    return content, title
+
 def  read_daizhi(filepath=None, seps=','):
     """
     本函数用于格式化殆知库数据, 进行过一步处理去除标点与空格
@@ -264,7 +282,6 @@ class LoadBertPretrainingDataset(object):
         :return:
         """
         paragraphs = self.get_format_data(file_path)
-        print(len(paragraphs))
         # 返回的是一个二维列表，每个列表可以看做是一个段落（其中每个元素为一句话）
         data = []
         max_len = 0
@@ -443,3 +460,151 @@ class LoadBertPretrainingDataset(object):
                 pred_idx.append(i)
         return pred_idx
 
+class LoadTitleMatchDataset():
+    def __init__(self, 
+                 vocab_path='./vocab.txt',
+                 tokenizer=None,
+                 batch_size=32,
+                 max_position_embeddings=512,
+                 max_len=400,
+                 max_sen_len=None,
+                 pad_index=0,
+                 is_sample_shuffle=True,
+                 random_state=2024,
+                 match_rate=0.5):
+        self.vocab = build_vocab(vocab_path)
+        self.tokenizer = tokenizer
+        self.batch_size = batch_size
+        self.max_len = max_len
+        self.max_sen_len = max_sen_len
+        self.max_position_embeddings = max_position_embeddings
+        self.pad_index = pad_index
+        self.is_sample_shuffle = is_sample_shuffle
+        self.random_state = random_state
+        self.match_rate = match_rate
+    
+        self.PAD_IDX = pad_index
+        self.SEP_IDX = self.vocab['[SEP]']
+        self.CLS_IDX = self.vocab['[CLS]']
+        self.MASK_IDS = self.vocab['[MASK]']
+
+        random.seed(self.random_state)
+
+    def get_format_data(self, file_path):
+        """
+        读取文件，制作对应的数据矩阵
+        param: file_path: 读取文件路径
+        return: paragraphs， title (list)
+        """
+
+        return read_title(file_path)
+
+    def get_match_title(self,content , title, titles):
+        """
+        根据诗词内容，标题以及mask_rate, 返回诗词内容与标题，以及是否匹配
+        :param content:诗词内容
+               title: 诗词标题
+               titles: 所有标题
+        :return content, title, true of false
+        """
+        if random.random() < self.match_rate:
+            is_match = True
+        else:
+            is_match = False
+            new_titile = random.choice(titles)
+            while new_titile == title:
+                new_titile = random.choice(titles)
+            title = new_titile
+        return content, title , is_match
+    
+    @process_cache(unique_key=["max_sen_len","match_rate","max_len"])
+    def data_process(self, file_path):
+        """
+        将诗词和随机标题组合在一起，返回最长长度, 长度超过最长诗句限制的诗会被截断
+        :param file_path: 数据集路径
+        :return: 索引矩阵，最长长度
+        """
+        data = []
+        paragraphs, titles = self.get_format_data(file_path)
+        for i in tqdm(range(0, len(paragraphs)), ncols=80, desc="制作标题匹配样本"):
+            content, title, is_match = self.get_match_title(paragraphs[i],titles[i], paragraphs)
+            logging.info(f" ## 当前诗词: {content}")
+            logging.info(f" ## 标题：{title}")
+            logging.info(f" ## 匹配标签: {is_match}")
+            token_a_ids = [self.vocab[token] for token in self.tokenizer(content)]
+            if len(token_a_ids > self.max_len):
+                token_a_ids = token_a_ids[ :self.max_len]
+            token_b_ids = [self.vocab[token] for token in self.tokenizer(title)]
+            token_ids = [self.CLS_IDX] + token_a_ids + [self.SEP_IDX] + token_b_ids
+
+            seg1 = [0] * (len(token_a_ids) + 2)
+            seg2 = [1] * (len(token_b_ids) + 1)
+            segs = seg1 + seg2
+            if len(token_ids) > self.max_position_embeddings - 1 :
+                token_ids = token_ids[:self.max_position_embeddings - 1]
+                segs = segs[:self.max_position_embeddings]
+            token_ids += [self.SEP_IDX]
+            assert len(token_ids) <= self.max_position_embeddings
+            assert len(segs) <= self.max_position_embeddings
+
+            logging.debug(f" ## token ids: {token_ids}")
+            logging.debug(f" ## is_match: {is_match}")
+
+            match_label = torch.tensor(int(is_match), dtype=torch.long)
+            token_ids = torch.tensor(token_ids, dtype=long)
+            max_len = max(max_len, token_ids.size(0))
+            logging.debug(f" ## 当前样本构造完成======= \n\n")
+            data.append([token_ids,segs,match_label])
+        all_data = {'data': data, 'max_len': max_len}
+        return all_data
+
+    def generate_batch(self, data_batch):
+        b_token_ids, b_segs, b_match_label = [], [], []
+        for (token_ids, segs ,match_label) in data_batch:
+            b_token_ids.append(token_ids)
+            b_segs.append(segs)
+            b_match_label.append(match_label)
+        b_token_ids = pad_sequence(b_token_ids,  # [batch_size,max_len]
+                                   padding_value=self.PAD_IDX,
+                                   batch_first=False,
+                                   max_len=self.max_sen_len)
+        # b_token_ids:  [src_len,batch_size]
+
+        b_segs = pad_sequence(b_segs,  # [batch_size,max_len]
+                              padding_value=self.PAD_IDX,
+                              batch_first=False,
+                              max_len=self.max_sen_len)
+        # b_segs: [src_len,batch_size]
+
+        b_match_label = torch.tensor(b_match_label, dtype=torch.long)
+
+        return b_token_ids, b_segs, b_match_label
+
+    def load_train_val_test_data(self,
+                                 test_only=False,
+                                 train_file_path=None,
+                                 test_file_path=None,
+                                 val_file_path=None):
+
+        test_data = self.data_process(test_file_path) 
+        test_iter = DataLoader(test_data, batch_size=self.batch_size,
+                               shuffle=False, collate_fn=self.generate_batch)
+        if(test_only):
+            logging.info(f" ## 返回测试集，包含样本{len(test_iter)}")
+            return test_iter
+        
+        data = self.data_process(file_path=train_file_path)
+        train_data, max_len = data['data'], data['max_len']
+        if self.max_sen_len == 'same':
+            self.max_sen_len = max_len
+        train_iter = DataLoader(train_data, batch_size=self.batch_size,
+                                shuffle=self.is_sample_shuffle,
+                                collate_fn=self.generate_batch)
+        val_data = self.data_process(file_path=val_file_path)['data']
+        val_iter = DataLoader(val_data, batch_size=self.batch_size,
+                              shuffle=False,
+                              collate_fn=self.generate_batch)
+        logging.info(f"## 成功返回训练集样本（{len(train_iter.dataset)}）个、开发集样本（{len(val_iter.dataset)}）个"
+                     f"测试集样本（{len(test_iter.dataset)}）个.")
+        return train_iter, test_iter, val_iter
+            
