@@ -471,7 +471,9 @@ class LoadTitleMatchDataset():
                  pad_index=0,
                  is_sample_shuffle=True,
                  random_state=2024,
-                 match_rate=0.5):
+                 match_rate=0.5,
+                 seps="_!_"):
+        self.seps = seps
         self.vocab = build_vocab(vocab_path)
         self.tokenizer = tokenizer
         self.batch_size = batch_size
@@ -551,6 +553,8 @@ class LoadTitleMatchDataset():
             logging.debug(f" ## token ids: {token_ids}")
             logging.debug(f" ## is_match: {is_match}")
 
+
+            segs = torch.tensor(segs, dtype=torch.long)
             match_label = torch.tensor(int(is_match), dtype=torch.long)
             token_ids = torch.tensor(token_ids, dtype=torch.long)
             max_len = max(max_len, token_ids.size(0))
@@ -570,7 +574,6 @@ class LoadTitleMatchDataset():
                                    batch_first=False,
                                    max_len=self.max_sen_len)
         # b_token_ids:  [src_len,batch_size]
-
         b_segs = pad_sequence(b_segs,  # [batch_size,max_len]
                               padding_value=self.PAD_IDX,
                               batch_first=False,
@@ -579,7 +582,8 @@ class LoadTitleMatchDataset():
 
         b_match_label = torch.tensor(b_match_label, dtype=torch.long)
 
-        return b_token_ids, b_segs, b_match_label
+        b_mask = (b_token_ids == self.PAD_IDX).transpose(0, 1)
+        return b_token_ids, b_segs, b_mask, b_match_label
 
     def load_train_val_test_data(self,
                                  test_only=False,

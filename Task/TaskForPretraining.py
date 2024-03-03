@@ -7,6 +7,7 @@ from utils import logger_init
 from model import BertConfig
 from model import BertForPretrainingModel
 from utils import LoadBertPretrainingDataset
+from utils import LoadTitleMatchDataset
 from transformers import BertTokenizer
 from transformers import AdamW
 from transformers import get_polynomial_decay_schedule_with_warmup
@@ -14,6 +15,7 @@ from torch.utils.tensorboard import SummaryWriter
 from copy import deepcopy
 import torch
 import time
+import random
 
 
 class ModelConfig:
@@ -37,13 +39,13 @@ class ModelConfig:
         self.data_name = 'Daizhi'
         self.seps = ','
 
-        self.dataset_dir = os.path.join(self.project_dir, 'data', 'Daizhi')
-        self.pretrained_model_dir = os.path.join(self.project_dir, "bert_base_chinese")
-        self.train_file_path = os.path.join(self.dataset_dir, 'daizhi.train.txt')
-        self.val_file_path = os.path.join(self.dataset_dir, 'daizhi.valid.txt')
-        self.test_file_path = os.path.join(self.dataset_dir, 'daizhi.test.txt')
-        self.data_name = 'Daizhi'
-        self.seps = ','
+        self.dataset_dir_2 = os.path.join(self.project_dir, 'data', 'title')
+        self.train_file_path_2 = os.path.join(self.dataset_dir_2, 'title.train.txt')
+        self.val_file_path_2 = os.path.join(self.dataset_dir_2, 'title.valid.txt')
+        self.test_file_path_2 = os.path.join(self.dataset_dir_2, 'title.test.txt')
+        self.max_len = 400 #诗词最大允许长度
+        self.data_name_2 = 'title'
+        self.seps_2 = '_!_'
         # 如果需要切换数据集，只需要更改上面的配置即可
         self.vocab_path = os.path.join(self.pretrained_model_dir, 'vocab.txt')
         self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
@@ -56,7 +58,8 @@ class ModelConfig:
         self.batch_size = 4
         self.max_sen_len = None  # 为None时则采用每个batch中最长的样本对该batch中的样本进行padding
         self.pad_index = 0
-        self.random_state = 2022
+        self.random_state = 2024
+        self.match_rate = 0.5
         self.learning_rate = 4e-5
         self.weight_decay = 0.1
         self.masked_rate = 0.15
@@ -67,6 +70,7 @@ class ModelConfig:
         self.epochs = 200
         self.model_val_per_epoch = 1
 
+        self.task_rate = 0.5 #训练时第二个任务出现的概率
         logger_init(log_file_name=self.data_name, log_level=self.log_level,
                     log_dir=self.logs_save_dir)
         if not os.path.exists(self.model_save_dir):
@@ -111,6 +115,23 @@ def train(config):
         data_loader.load_train_val_test_data(test_file_path=config.test_file_path,
                                              train_file_path=config.train_file_path,
                                              val_file_path=config.val_file_path)
+    train_iter=None
+    data_loader_2 = LoadTitleMatchDataset(vocab_path=config.vocab_path,
+                                          tokenizer=bert_tokenize,
+                                          batch_size=config.batch_size,
+                                          max_len=config.max_len,
+                                          max_position_embeddings=config.max_position_embeddings,
+                                          max_sen_len=config.max_sen_len,
+                                          pad_index=config.pad_index,
+                                          seps=config.seps_2,
+                                          is_sample_shuffle=config.is_sample_shuffle,
+                                          random_state=config.random_state,
+                                          match_rate=config.match_rate
+                                          )
+    train_iter_2, test_iter_2, val_iter_2 = \
+        data_loader_2.load_train_val_test_data(test_file_path=config.test_file_path_2,
+                                               train_file_path=config.train_file_path_2,
+                                               val_file_path=config.val_file_path_2)
     
     # Optimizer
     # Split weights in two groups, one with weight decay and the other not.
@@ -132,61 +153,96 @@ def train(config):
     optimizer = AdamW(optimizer_grouped_parameters)
     scheduler = get_polynomial_decay_schedule_with_warmup(optimizer,
                                                           int(len(train_iter) * 0),
-                                                          int(config.epochs * len(train_iter)),
+                                                          int(config.epochs * (len(train_iter) + len(train_iter_2)) / 2),
                                                           last_epoch=last_epoch)
     max_acc = 0
     state_dict = None
     for epoch in range(config.epochs):
         losses = 0
+        losses_2 = 0
         start_time = time.time()
-        for idx, (b_token_ids, b_segs, b_mask, b_mlm_label, b_nsp_label) in enumerate(train_iter):
-            b_token_ids = b_token_ids.to(config.device)  # [src_len, batch_size]
-            b_segs = b_segs.to(config.device)
-            b_mask = b_mask.to(config.device)
-            b_mlm_label = b_mlm_label.to(config.device)
-            b_nsp_label = b_nsp_label.to(config.device)
-            loss, mlm_logits, nsp_logits = model(input_ids=b_token_ids,
-                                                 attention_mask=b_mask,
-                                                 token_type_ids=b_segs,
-                                                 masked_lm_labels=b_mlm_label,
-                                                 next_sentence_labels=b_nsp_label)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            scheduler.step()
-            losses += loss.item()
-            mlm_acc, _, _, nsp_acc, _, _ = accuracy(mlm_logits, nsp_logits, b_mlm_label,
-                                                    b_nsp_label, data_loader.PAD_IDX)
-            if idx % 20 == 0:
-                logging.info(f"Epoch: [{epoch + 1}/{config.epochs}], Batch[{idx}/{len(train_iter)}], "
-                             f"Train loss :{loss.item():.3f}, Train mlm acc: {mlm_acc:.3f},"
-                             f"nsp acc: {nsp_acc:.3f}")
+        if random.random() < config.task_rate:
+            for idx, (b_token_ids, b_segs, b_mask, b_mlm_label, b_nsp_label) in enumerate(train_iter):
+                b_token_ids = b_token_ids.to(config.device)  # [src_len, batch_size]
+                b_segs = b_segs.to(config.device)
+                b_mask = b_mask.to(config.device)
+                b_mlm_label = b_mlm_label.to(config.device)
+                b_nsp_label = b_nsp_label.to(config.device)
+                loss, mlm_logits, nsp_logits = model(input_ids=b_token_ids,
+                                                    attention_mask=b_mask,
+                                                    token_type_ids=b_segs,
+                                                    masked_lm_labels=b_mlm_label,
+                                                    next_sentence_labels=b_nsp_label)
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                scheduler.step()
+                losses += loss.item()
+                mlm_acc, _, _, nsp_acc, _, _ = accuracy(mlm_logits, nsp_logits, b_mlm_label,
+                                                        b_nsp_label, data_loader.PAD_IDX)
+                if idx % 20 == 0:
+                    logging.info(f"Epoch: [{epoch + 1}/{config.epochs}], Batch[{idx}/{len(train_iter)}], "
+                                f"Train loss :{loss.item():.3f}, Train mlm acc: {mlm_acc:.3f},"
+                                f"nsp acc: {nsp_acc:.3f}")
+                    config.writer.add_scalar('Training/Loss', loss.item(), scheduler.last_epoch)
+                    config.writer.add_scalar('Training/Learning Rate', scheduler.get_last_lr()[0], scheduler.last_epoch)
+                    config.writer.add_scalars(main_tag='Training/Accuracy',
+                                            tag_scalar_dict={'NSP': nsp_acc,
+                                                            'MLM': mlm_acc},
+                                            global_step=scheduler.last_epoch)
+        else:
+            for idx, (b_token_ids,b_segs, b_mask,b_label) in enumerate(train_iter_2):
+                b_token_ids = b_token_ids.to(config.device)  # [src_len, batch_size]
+                b_segs = b_segs.to(config.device)
+                b_mask = b_mask.to(config.device)
+                b_label = b_label.to(config.device)
+
+                loss, title_logits = model(input_ids=b_token_ids,
+                                            attention_mask=b_mask,
+                                            token_type_ids=b_segs,
+                                            title_match_label=b_label,
+                                            type=False)
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                scheduler.step()
+                losses_2 += loss.item()
+                title_acc, _, _ = accuracy_2(title_logits,b_label)
+                if idx % 20 == 0:
+                    logging.info(f"Epoch: [{epoch + 1}/{config.epochs}], Batch[{idx}/{len(train_iter_2)}], "
+                            f"Train loss :{loss.item():.3f}, Train title_match acc: {title_acc:.3f}")
+                            
                 config.writer.add_scalar('Training/Loss', loss.item(), scheduler.last_epoch)
                 config.writer.add_scalar('Training/Learning Rate', scheduler.get_last_lr()[0], scheduler.last_epoch)
                 config.writer.add_scalars(main_tag='Training/Accuracy',
-                                          tag_scalar_dict={'NSP': nsp_acc,
-                                                           'MLM': mlm_acc},
-                                          global_step=scheduler.last_epoch)
-        end_time = time.time()
-        train_loss = losses / len(train_iter)
-        logging.info(f"Epoch: [{epoch + 1}/{config.epochs}], Train loss: "
-                     f"{train_loss:.3f}, Epoch time = {(end_time - start_time):.3f}s")
-        if (epoch + 1) % config.model_val_per_epoch == 0:
-            mlm_acc, nsp_acc = evaluate(config, val_iter, model, data_loader.PAD_IDX)
-            logging.info(f" ### MLM Accuracy on val: {round(mlm_acc, 4)}, "
-                         f"NSP Accuracy on val: {round(nsp_acc, 4)}")
-            config.writer.add_scalars(main_tag='Testing/Accuracy',
-                                      tag_scalar_dict={'NSP': nsp_acc,
-                                                       'MLM': mlm_acc},
-                                      global_step=scheduler.last_epoch)
-            # mlm_acc, nsp_acc = evaluate(config, train_iter, model, data_loader.PAD_IDX)
-            if mlm_acc > max_acc:
-                max_acc = mlm_acc
-                state_dict = deepcopy(model.state_dict())
-            torch.save({'last_epoch': scheduler.last_epoch,
-                        'model_state_dict': state_dict},
-                       config.model_save_path)
+                                        tag_scalar_dict={'title': title_acc,
+                                                        },
+                                        global_step=scheduler.last_epoch)
+            end_time = time.time()
+            train_loss = losses / len(train_iter)
+            logging.info(f"Epoch: [{epoch + 1}/{config.epochs}], Train loss: "
+                        f"{train_loss:.3f}, Epoch time = {(end_time - start_time):.3f}s")
+            if (epoch + 1) % config.model_val_per_epoch == 0:
+                mlm_acc, nsp_acc = evaluate(config, val_iter, model, data_loader.PAD_IDX)
+                logging.info(f" ### MLM Accuracy on val: {round(mlm_acc, 4)}, "
+                            f"NSP Accuracy on val: {round(nsp_acc, 4)}")
+                config.writer.add_scalars(main_tag='Testing/Accuracy',
+                                        tag_scalar_dict={'NSP': nsp_acc,
+                                                        'MLM': mlm_acc},
+                                        global_step=scheduler.last_epoch)
+                # mlm_acc, nsp_acc = evaluate(config, train_iter, model, data_loader.PAD_IDX)
+                if mlm_acc > max_acc:
+                    max_acc = mlm_acc
+                    state_dict = deepcopy(model.state_dict())
+                torch.save({'last_epoch': scheduler.last_epoch,
+                            'model_state_dict': state_dict},
+                        config.model_save_path)
 
+def accuracy_2(title_logits, title_label):
+    title_correct = (title_logits.argmax(1) == title_label).float().sum()
+    title_total = len(title_label)
+    title_acc = float(title_correct) / title_total
+    return [title_acc, title_correct, title_total]
 
 def accuracy(mlm_logits, nsp_logits, mlm_labels, nsp_label, PAD_IDX):
     """

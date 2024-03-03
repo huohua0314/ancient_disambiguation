@@ -153,7 +153,10 @@ class BertForPretrainingModel(nn.Module):
                 token_type_ids=None,  # [src_len, batch_size]
                 position_ids=None,
                 masked_lm_labels=None,  # [src_len,batch_size]
-                next_sentence_labels=None):  # [batch_size]
+                next_sentence_labels=None,
+                title_match_label=None,
+                type=True):  # [batch_size]
+        
         pooled_output, all_encoder_outputs = self.bert(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -165,19 +168,26 @@ class BertForPretrainingModel(nn.Module):
         # mlm_prediction_logits: [src_len, batch_size, vocab_size]
         nsp_pred_logits = self.nsp_prediction(pooled_output)
         # nsp_pred_logits： [batch_size, 2]
+        title_pred_logits = self.title_prediction(pooled_output)
 
-        if masked_lm_labels is not None and next_sentence_labels is not None:
-            loss_fct_mlm = nn.CrossEntropyLoss(ignore_index=0)
-            # MLM任务在构造数据集时pandding部分和MASK部分都是用的0来填充，所以ignore_index需要指定为0
-            loss_fct_nsp = nn.CrossEntropyLoss()
-            # 由于NSP中的分类标签中含有0，上面MLM中的损失指定了ignore_index=0，所以这里需要重新定义一个CrossEntropyLoss
-            # 如果MLM任务在padding和MASK中用100之类的来代替，那么两者可以共用一个CrossEntropyLoss
-            mlm_loss = loss_fct_mlm(mlm_prediction_logits.reshape(-1, self.config.vocab_size),
-                                    masked_lm_labels.reshape(-1))
-            nsp_loss = loss_fct_nsp(nsp_pred_logits.reshape(-1, 2),
-                                    next_sentence_labels.reshape(-1))
-            total_loss = mlm_loss + nsp_loss
-            return total_loss, mlm_prediction_logits, nsp_pred_logits
+        if type:
+            if masked_lm_labels is not None and next_sentence_labels is not None:
+                loss_fct_mlm = nn.CrossEntropyLoss(ignore_index=0)
+                # MLM任务在构造数据集时pandding部分和MASK部分都是用的0来填充，所以ignore_index需要指定为0
+                loss_fct_nsp = nn.CrossEntropyLoss()
+                # 由于NSP中的分类标签中含有0，上面MLM中的损失指定了ignore_index=0，所以这里需要重新定义一个CrossEntropyLoss
+                # 如果MLM任务在padding和MASK中用100之类的来代替，那么两者可以共用一个CrossEntropyLoss
+                mlm_loss = loss_fct_mlm(mlm_prediction_logits.reshape(-1, self.config.vocab_size),
+                                        masked_lm_labels.reshape(-1))
+                nsp_loss = loss_fct_nsp(nsp_pred_logits.reshape(-1, 2),
+                                        next_sentence_labels.reshape(-1))
+                total_loss = mlm_loss + nsp_loss
+                return total_loss, mlm_prediction_logits, nsp_pred_logits
+            else:
+                return mlm_prediction_logits, nsp_pred_logits
         else:
-            return mlm_prediction_logits, nsp_pred_logits
+            loss_fn_title = nn.CrossEntropyLoss()
+            title_loss = loss_fn_title(title_pred_logits.reshape(-1,2), title_match_label.reshape(-1))
+            return title_loss, title_pred_logits
+
         # [src_len, batch_size, vocab_size], [batch_size, 2]
