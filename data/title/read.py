@@ -42,9 +42,9 @@ def format_data():
                 content, title= read_file(file_path)
                 for con, tit in zip(content, title):
                     f.write(con+ "_!_" + tit + '\n')
-    make_data("title_train_txt",0,200000,0,40000)
-    make_data("title_test_txt",200000,220000,40000,48000)
-    make_data("title_val_txt",220000,240000,48000,57000)
+    make_data("title.train.txt",0,200000,0,40000)
+    make_data("title.test.txt",200000,220000,40000,48000)
+    make_data("title.val.txt",220000,240000,48000,57000)
 
 if __name__ == "__main__":
     format_data()

@@ -37,6 +37,13 @@ class ModelConfig:
         self.data_name = 'Daizhi'
         self.seps = ','
 
+        self.dataset_dir = os.path.join(self.project_dir, 'data', 'Daizhi')
+        self.pretrained_model_dir = os.path.join(self.project_dir, "bert_base_chinese")
+        self.train_file_path = os.path.join(self.dataset_dir, 'daizhi.train.txt')
+        self.val_file_path = os.path.join(self.dataset_dir, 'daizhi.valid.txt')
+        self.test_file_path = os.path.join(self.dataset_dir, 'daizhi.test.txt')
+        self.data_name = 'Daizhi'
+        self.seps = ','
         # 如果需要切换数据集，只需要更改上面的配置即可
         self.vocab_path = os.path.join(self.pretrained_model_dir, 'vocab.txt')
         self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
@@ -104,6 +111,7 @@ def train(config):
         data_loader.load_train_val_test_data(test_file_path=config.test_file_path,
                                              train_file_path=config.train_file_path,
                                              val_file_path=config.val_file_path)
+    
     # Optimizer
     # Split weights in two groups, one with weight decay and the other not.
     no_decay = ["bias", "LayerNorm.weight"]

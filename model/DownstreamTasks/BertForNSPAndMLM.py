@@ -145,6 +145,7 @@ class BertForPretrainingModel(nn.Module):
             logging.info(f"## 使用token embedding中的权重矩阵作为输出层的权重！{weights.shape}")
         self.mlm_prediction = BertForLMTransformHead(config, weights)
         self.nsp_prediction = nn.Linear(config.hidden_size, 2)
+        self.title_prediction = nn.Linear(config.hidden_size,2)
         self.config = config
 
     def forward(self, input_ids,  # [src_len, batch_size]
@@ -164,6 +165,7 @@ class BertForPretrainingModel(nn.Module):
         # mlm_prediction_logits: [src_len, batch_size, vocab_size]
         nsp_pred_logits = self.nsp_prediction(pooled_output)
         # nsp_pred_logits： [batch_size, 2]
+
         if masked_lm_labels is not None and next_sentence_labels is not None:
             loss_fct_mlm = nn.CrossEntropyLoss(ignore_index=0)
             # MLM任务在构造数据集时pandding部分和MASK部分都是用的0来填充，所以ignore_index需要指定为0

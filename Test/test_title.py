@@ -64,7 +64,7 @@ if __name__ == '__main__':
                                         random_state=model_config.match_rate,
                                         match_rate=model_config.match_rate
                                          )
-    test_iter = data_loadeer.load_train_val_test_data(True,model_config.test_file_path)
+    test_iter = data_loadeer.load_train_val_test_data(True,test_file_path=model_config.test_file_path)
     for b_token_ids, b_segs, b_match_label in test_iter:
         print(b_token_ids.shpae)
         print(b_segs.shape)

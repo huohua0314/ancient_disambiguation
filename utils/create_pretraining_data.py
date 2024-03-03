@@ -525,6 +525,7 @@ class LoadTitleMatchDataset():
         :return: 索引矩阵，最长长度
         """
         data = []
+        max_len = 0
         paragraphs, titles = self.get_format_data(file_path)
         for i in tqdm(range(0, len(paragraphs)), ncols=80, desc="制作标题匹配样本"):
             content, title, is_match = self.get_match_title(paragraphs[i],titles[i], paragraphs)
@@ -532,7 +533,7 @@ class LoadTitleMatchDataset():
             logging.info(f" ## 标题：{title}")
             logging.info(f" ## 匹配标签: {is_match}")
             token_a_ids = [self.vocab[token] for token in self.tokenizer(content)]
-            if len(token_a_ids > self.max_len):
+            if len(token_a_ids) > self.max_len:
                 token_a_ids = token_a_ids[ :self.max_len]
             token_b_ids = [self.vocab[token] for token in self.tokenizer(title)]
             token_ids = [self.CLS_IDX] + token_a_ids + [self.SEP_IDX] + token_b_ids
@@ -551,7 +552,7 @@ class LoadTitleMatchDataset():
             logging.debug(f" ## is_match: {is_match}")
 
             match_label = torch.tensor(int(is_match), dtype=torch.long)
-            token_ids = torch.tensor(token_ids, dtype=long)
+            token_ids = torch.tensor(token_ids, dtype=torch.long)
             max_len = max(max_len, token_ids.size(0))
             logging.debug(f" ## 当前样本构造完成======= \n\n")
             data.append([token_ids,segs,match_label])
@@ -586,7 +587,7 @@ class LoadTitleMatchDataset():
                                  test_file_path=None,
                                  val_file_path=None):
 
-        test_data = self.data_process(test_file_path) 
+        test_data = self.data_process(file_path=test_file_path) 
         test_iter = DataLoader(test_data, batch_size=self.batch_size,
                                shuffle=False, collate_fn=self.generate_batch)
         if(test_only):
