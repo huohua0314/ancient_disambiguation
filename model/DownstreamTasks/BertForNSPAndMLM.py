@@ -148,6 +148,19 @@ class BertForPretrainingModel(nn.Module):
         self.title_prediction = nn.Linear(config.hidden_size,2)
         self.config = config
 
+    def hidden_vector(self, input_ids,  # [src_len, batch_size]
+                attention_mask=None,  # [batch_size, src_len] mask掉padding部分的内容
+                token_type_ids=None,  # [src_len, batch_size]
+                position_ids=None
+                      ):
+        pooled_output, all_encoder_outputs = self.bert(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            position_ids=position_ids)
+        sequence_output = all_encoder_outputs[-1] 
+        return sequence_output
+        
     def forward(self, input_ids,  # [src_len, batch_size]
                 attention_mask=None,  # [batch_size, src_len] mask掉padding部分的内容
                 token_type_ids=None,  # [src_len, batch_size]
@@ -156,7 +169,7 @@ class BertForPretrainingModel(nn.Module):
                 next_sentence_labels=None,
                 title_match_label=None,
                 type=True):  # [batch_size]
-        
+            
         pooled_output, all_encoder_outputs = self.bert(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -191,3 +204,4 @@ class BertForPretrainingModel(nn.Module):
             return title_loss, title_pred_logits
 
         # [src_len, batch_size, vocab_size], [batch_size, 2]
+

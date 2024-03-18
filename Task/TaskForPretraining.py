@@ -19,7 +19,7 @@ import random
 
 
 class ModelConfig:
-    def __init__(self):
+    def __init__(self, model_path):
         self.project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
         # ========== wike2 数据集相关配置
@@ -32,7 +32,10 @@ class ModelConfig:
 
         # ========== songci 数据集相关配置
         self.dataset_dir = os.path.join(self.project_dir, 'data', 'Daizhi')
-        self.pretrained_model_dir = os.path.join(self.project_dir, "bert_base_chinese")
+        if model_path == None:
+            self.pretrained_model_dir = os.path.join(self.project_dir, "bert_base_chinese")
+        else:
+            self.pretrained_model_dir = model_path
         self.train_file_path = os.path.join(self.dataset_dir, 'daizhi.train.txt')
         self.val_file_path = os.path.join(self.dataset_dir, 'daizhi.valid.txt')
         self.test_file_path = os.path.join(self.dataset_dir, 'daizhi.test.txt')
@@ -360,11 +363,17 @@ def pretty_print(token_ids, logits, pred_idx, itos, sentences, language):
         logging.info("===============")
 
 
-if __name__ == '__main__':
-    config = ModelConfig()
-    train(config)
-    sentences_1 = ["I no longer love her, true, but perhaps I love her.",
-                   "Love is so short and oblivion so long."]
-    sentences_2 = ["十年生死两茫茫。不思量。自难忘。千里孤坟，无处话凄凉。",
-                   "红酥手。黄藤酒。满园春色宫墙柳。"]
-    inference(config, sentences_2, masked=False, language='zh',random_state=2022)
+class Disambiguation:
+    def __init__(self, model_path) -> None:
+        """
+            "model_path": 预训练模型路径
+        """
+        self.config = ModelConfig(model_path)
+        self.model = BertForPretrainingModel(self.config, model_path)
+
+    def hidden_vector(self,input_ids,attention_mask=None,token_type_ids=None,position_ids=None):
+
+        return self.model.hidden_vector(input_ids, #[src_len, batch_size]
+                                        attention_mask=attention_mask,
+                                        token_type_ids=token_type_ids,
+                                        position_ids=position_ids)

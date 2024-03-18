@@ -5,9 +5,10 @@ pandas分批读入标注数据,将其转化为[data1,data2,...],82开划分测�
 """
 
 from model import BertEmbedding
-# from model import Bert
-# from model import BertConfig
-# from utils import Vocab
+from model import Bert
+from model import BertConfig
+from model import BertForPretrainingModel
+from utils import Vocab
 import pandas as pd
 import numpy as np
 import torch
@@ -239,35 +240,11 @@ def stats(data_list):
     plt.show()
     return 0
 
-if __name__ == '__main__':
-    input_word = '师古曰：「[爱]利，谓仁[爱]而欲安利人也。」'
-    sense_id,word_id = 's2','w1'
-    global batch_size,path,vocab_path
-    batch_size = 128
-    vocab_path = "D:\Learning Material\Ancient_Chinese\\ancient_disambiguation-master\\bert_base_chinese\\vocab.txt"
-    #path = 'D:\Learning Material\Ancient_Chinese\\ancient_chinese_sense_annotation-main\\1113_icip_ancient_chinese_annotation_corpus.xlsx'
-    #result = parse_masked_string(input_word,word_id,sense_id)
-    # result = read_data(path)
-    # if result is not None:  
-    #     print(result[1].content)      # 打印去除了[]的文本内容  
-    #     print(result[1].Masked_Position)  # 打印词语的位置  
-    #     print(result[1].Word_id)        # 打印词语的id  
-    #     print(result[1].Sense_id)       # 打印义项的id
-    #     print(result[1].meaning)
-    # temp = read_data(path)
-    # res = data_process(temp)
-    # print(res[0][0].content)
-    # print(res[0][1].content)
-    # print(res[1][0].content)
-    # print(res[1][1].content)
-    #stats(res)
-    # path = "D:\Learning Material\Ancient_Chinese\BertWithPretrained-main\\bert_base_chinese\\vocab.txt"
-    # my_dict = read_vocab(path)
-    # print(my_dict)
-    vocab = Vocab(vocab_path)
-    print(vocab)
-    print(vocab.itos)  # 得到一个列表，返回词表中的每一个词；
-    print(vocab.itos[2])  # 通过索引返回得到词表中对应的词；
-    print(vocab.stoi)  # 得到一个字典，返回词表中每个词的索引；
-    print(vocab.stoi['我'])  # 通过单词返回得到词表中对应的索引
-    print(len(vocab))  # 返回词表长度
+        
+class Disambiguation:
+    def __init__(self, ) -> None:
+        self.model = BertForPretrainingModel
+
+
+
+
