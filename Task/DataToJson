@@ -1,0 +1,196 @@
+import os 
+import sys
+sys.path.append('./')
+from model import BertForPretrainingModel
+from model.BasicBert.BertConfig import BertConfig
+import pandas as pd
+import numpy as np
+import logging
+import pretty_errors
+import random
+import torch
+import tqdm
+import torch.nn.functional as F  
+import json
+
+class ModelConfig(object):
+    def __init__(self) -> None:
+        self.project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self.pretrained_model_dir = os.path.join(self.project_dir, "bert_base_chinese")
+        bert_config_path = os.path.join(self.pretrained_model_dir, "config.json")
+        bert_config = BertConfig.from_json_file(bert_config_path)
+        for key, value in bert_config.__dict__.items():
+            self.__dict__[key] = value
+        # 将当前配置打印到日志文件中
+        logging.info(" ### 将当前配置打印到日志文件中 ")
+        for key, value in self.__dict__.items():
+            logging.info(f"### {key} = {value}")
+
+class Vocab:
+    """
+    根据本地的vocab文件,构造一个词表
+    vocab = Vocab()
+    print(vocab.itos)  # 得到一个列表，返回词表中的每一个词；
+    print(vocab.itos[2])  # 通过索引返回得到词表中对应的词；
+    print(vocab.stoi)  # 得到一个字典，返回词表中每个词的索引；
+    print(vocab.stoi['我'])  # 通过单词返回得到词表中对应的索引
+    print(len(vocab))  # 返回词表长度
+    """
+    UNK = '[UNK]'
+    def __init__(self, vocab_path):
+        self.stoi = {}
+        self.itos = []
+        with open(vocab_path, 'r', encoding='utf-8') as f:
+            for i, word in enumerate(f):
+                w = word.strip('\n')
+                self.stoi[w] = i
+                self.itos.append(w)
+
+    def __getitem__(self, token):
+        return self.stoi.get(token, self.stoi.get(Vocab.UNK))
+
+    def __len__(self):
+        return len(self.itos)
+    
+class Disambiguation:
+    def __init__(self, model_path) -> None:
+        self.config = ModelConfig()
+        self.model = BertForPretrainingModel(self.config,model_path)
+        self.model = self.model.eval()
+    def hidden_vector(self, input_ids,attention_mask=None,token_type_ids=None,position_ids=None):
+        # print("disambiguation class is called!")
+        return self.model.hidden_vector(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            position_ids=position_ids
+        )
+
+class yuliao:
+    def __init__(self,word_id,sense_id,content,meaning,word_position) -> None:
+        self.word_id = word_id #str对象,'w1','w2',...
+        self.sense_id = sense_id #str对象,'s1','s2',...
+        self.content = content #str对象,'便携手、月地云阶里，爱良夜微暖。'
+        self.meaning = meaning #str对象,'喜爱，爱好'
+        self.word_position = word_position #int对象,词语在句子中的下标,由于一个句子中可能不止标注一个字,仅返回第一个下标
+
+def parse_masked_string(original_string,word_id,sense_id,meaning):
+    """
+    params
+    original_string: 包含[]的语句
+    word_id: 词语id
+    sense_id: 义项id
+    meaning: 义项
+    去除掉语料中的空格并生成data对象
+    Output: yuliao实例
+    """
+
+    clean_string = original_string.replace('[', '').replace(']', '')
+    my_string = original_string
+    sub_string = '['
+    position = my_string.find(sub_string) 
+    # print(f"The word position is:",position)
+    return yuliao(word_id,sense_id,clean_string,meaning,position)
+
+def read_data(path, batch_size, start_index=0):
+    """
+    读入路径
+    return [yuliao1,yuliao2,...]
+    """
+    content = pd.read_excel(path,sheet_name='语料库')
+    batch_data = content.iloc[start_index:start_index + batch_size] 
+    result = list()
+    for _,row in batch_data.iterrows():
+        result.append(parse_masked_string(row['语料'],row['词语id'],row['义项id'],row['义项描述']))
+
+    return result
+
+def Write_To_File():
+    """
+    将语料通过模型,得到hidden_vector
+    再将其写入json文件中,格式为(词语id,义项id,hidden_vector)
+
+    """
+    model_path = './bert_base_chinese'
+    vocab_path = './Task/vocab.txt'
+    data_path = "./Task/1113_icip_ancient_chinese_annotation_corpus.xlsx"
+    #my_test = Disambiguation(model_path)
+    vocab = Vocab(vocab_path)
+    batch_size = 100
+    start_index = 0
+    res_list = []
+    with torch.no_grad():
+        test_model = Disambiguation(model_path) 
+        while True:
+            content_batch = read_data(data_path, batch_size, start_index)  
+            if not content_batch:  
+                # 如果没有更多数据，则退出循环  
+                break 
+            print("{} is finished!".format(batch_size+start_index))
+            for i in range(len(content_batch)):
+                word_vector = get_token_id(content_batch[i],vocab) # 给word_vector 加入 batch_size 这个维度
+                # print(f"a: {word_vector.shape}")
+                temp = test_model.hidden_vector(word_vector)
+                # print(f"shape : {temp.shape}")
+                # print(f"The word position is:",content_batch[i].word_position)
+                hidden_vector = temp[content_batch[i].word_position][0] # 取出对应的hiddern_vector, 建议把形状打印出来看一下
+                # print(f"The word hidden_vector shape is:",hidden_vector.shape)
+                res_list.append((content_batch[i].word_id,content_batch[i].sense_id,hidden_vector))
+            with open('../autodl-tmp/yuliao_trained_by_others.json', 'a') as f:  
+                for item in res_list:  
+                    # print(item)
+                    # print(type(item))
+                    # 将Python字典转换为JSON格式的字符串  
+                    temp =   {'word_id':item[0],\
+                              'sense_id':item[1],\
+                                'hidden_vector':item[2].tolist()}
+                    json_item = json.dumps(temp)
+                    if f.tell() != 0:  # 如果不是文件的开头（即不是第一个元素）  
+                        f.write(',') 
+                        # 将JSON字符串写入文件  
+                    f.write(json_item) 
+                    f.write('\n')
+            res_list = []
+            start_index += batch_size
+            # if start_index >= 200:
+            #     break #进行小批量测试
+        #关掉model.inference
+        print("transfer to hidden vector finished!")
+
+def get_token_id(data,vocab):
+        """
+        Input: data类,vocab词表字典,
+        Output: position_id 形状为# [src_len, batch_size]
+        将data实例转化为position_id词向量
+        """
+        content = data.content
+        word_vector = list()
+        for each_word in content:
+            word_vector.append(vocab[each_word])
+        res = torch.from_numpy(np.transpose(word_vector))
+        res = res.reshape(-1,1)
+        # print(res.shape)
+        return res
+
+def Data_patition() -> None:
+    # 定义划分比例  
+    train_ratio = 0.8  
+    test_ratio = 0.2  
+    
+    # 打开文件  
+    with open('../autodl-fs/yuliao.json', 'r',encoding='utf-8') as file:  
+        with open('../autodl-tmp/train_set.json','w') as train_file:
+            with open('../autodl-tmp/test_set.json','w') as  test_file:
+                i = 0
+                for line in file:  
+                    if random.random() < train_ratio:
+                        train_file.write(line)
+                    else:
+                        test_file.write(line)
+                    if i % 100 == 0:
+                        print("{} is finished!".format(i))
+                    i += 1
+
+if __name__ == '__main__':
+    Write_To_File()
+    Data_patition()
