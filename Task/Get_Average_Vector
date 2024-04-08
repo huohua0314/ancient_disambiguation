@@ -1,0 +1,185 @@
+import json
+import torch
+import pretty_errors
+import torch.nn.functional as F  
+
+class yuliao_in_file:
+    def __init__(self,word_id,sense_id,hidden_vector) -> None:
+        self.word_id = word_id #str对象,'w1','w2',...
+        self.sense_id = sense_id #str对象,'s1','s2',...
+        self.hidden_vector = torch.tensor(hidden_vector, dtype=torch.float)
+
+class yixiang:
+    def __init__(self,word_id,sense_id,hidden_vector) -> None:
+        self.word_id = word_id #str对象,'w1','w2',...
+        self.sense_id = sense_id #str对象,'s1','s2',...
+        self.hidden_vector = hidden_vector
+        self.label_times = 0 #训练时该义项出现的次数
+    
+    def add_label_times(self)-> None: 
+        self.label_times += 1
+    
+    def get_label_times(self):
+        return self.label_times
+
+    def get_word_id(self):
+        return self.word_id
+    
+    def get_sense_id(self):
+        return self.sense_id
+    
+class train_res:
+    def __init__(self,word_id,sens_id,train_times) -> None:
+        self.word_id = word_id
+        self.sense_id = sens_id
+        self.train_times = train_times #训练时出现的次数
+        self.test_times = 0 #测试的次数
+        self.correct_times = 0 #正确的次数
+    
+    def add_test_times(self) -> None:
+        self.test_times += 1
+
+    def add_correct_times(self) -> None:
+        self.correct_times += 1
+    
+def distance_compute(tensor1,tensor2):
+    """
+    计算余弦相似度
+    返回每个义项的余弦相似度
+    """
+    # print("distance_compute is called!")
+    tensor1_norm = F.normalize(tensor1, dim=0)  
+    tensor2_norm = F.normalize(tensor2, dim=0) 
+    cosine_similarity = torch.cosine_similarity(tensor1_norm.unsqueeze(0), tensor2_norm.unsqueeze(0), dim=1)
+    return cosine_similarity
+
+def compute_data(path='../autodl-tmp/train_set.json'):
+    """
+    input: path
+    output: [yixiang1,yixiang2,...]
+    """
+    # print("compute_data is called!")
+    global yixiang_list
+    #创建一个yixiang表实例
+    yixiang_list = []
+    cnt = 0
+    with open(path, 'r',encoding='utf-8') as file:
+        #每行读取进行计算操作
+        for line in file:
+            if line[0] == ",":
+                line = line[1:]
+            data = json.loads(line.strip(' ').lstrip())
+            # 创建yuliao_in_file类的实例  
+            instance =yuliao_in_file(data['word_id'], data['sense_id'], data['hidden_vector'])
+            # print(instance.word_id) 
+            yixiang_list = compute_vector(instance,yixiang_list)
+
+            if cnt % 100 == 0:
+                print("{} instance is finished!".format(cnt))
+            cnt += 1
+
+    # print(type(yixiang_list))
+    # print(yixiang_list)
+    # print(yixiang_list[0])
+    return yixiang_list
+
+def compute_vector(yuliao,yixiang_list):
+    """
+    input: yuliao
+    output: [yixiang1,yixiang2,...] 
+    """
+    # print("compute_vector is called!")
+    is_exist = False
+    if len(yixiang_list) == 0:
+        temp = yixiang(yuliao.word_id,yuliao.sense_id,yuliao.hidden_vector)
+        yixiang_list.append(temp)
+    else:
+        for i in range(len(yixiang_list)):
+            if yixiang_list[i].word_id == yuliao.word_id and yixiang_list[i].sense_id == yuliao.sense_id:
+                is_exist = True
+                break
+
+    if is_exist:
+        yixiang_list[i].hidden_vector = (yixiang_list[i].hidden_vector * yixiang_list[i].label_times\
+                                        + yuliao.hidden_vector) / (yixiang_list[i].label_times + 1)
+        yixiang_list[i].add_label_times()
+    else:
+        temp = yixiang(yuliao.word_id,yuliao.sense_id,yuliao.hidden_vector)
+        # print("The append content is:",temp)
+        # print(temp.sense_id)
+        # print(temp.word_id)
+        yixiang_list.append(temp)
+                
+    return yixiang_list
+
+
+def test(yixiang_list,path='../autodl-tmp/test_set.json'):
+    train_res_list = [] #用于存储训练结果[train_res1,train_res2,...]
+    for i in range(len(yixiang_list)):
+        #用于将train_res_list初始化
+        # print(yixiang_list)
+        train_res_list.append(train_res(yixiang_list[i].word_id,yixiang_list[i].sense_id,yixiang_list[i].label_times))
+
+    with open(path,'r') as file:
+        for line in file:
+            if line[0] == ",":
+                line = line[1:]
+            json_data = json.loads(line)
+            # print(json_data)
+            # print(type(json_data))
+            data = yuliao_in_file(json_data['word_id'],json_data['sense_id'],json_data['hidden_vector'])
+            correct_key = (json_data['word_id'],json_data['sense_id']) #正确的data标签
+            distance_list = {} #用于记录yixiang的余弦相似度
+            memo = {} #用于记录yixiang在yixiang_list中的下标
+            for i in range(len(yixiang_list)):
+                # print("The word id is:",yixiang_list[i].word_id)
+                # print("The sense id is:",yixiang_list[i].sense_id)
+                if yixiang_list[i].word_id == data.word_id:
+                    predict_keys = (yixiang_list[i].word_id,yixiang_list[i].sense_id)
+                    distance_list[predict_keys] = distance_compute(yixiang_list[i].hidden_vector,data.hidden_vector)
+                    memo[predict_keys] = i
+                else:
+                    pass
+            # print(correct_key)
+            # print(distance_list)
+            try:
+                predict_key = max(distance_list.items(), key=lambda kv: kv[1])[0]
+                idx = memo[predict_key] #取出最大值的下标
+                # print(train_res_list[idx].sense_id)
+                train_res_list[idx].add_test_times() #对测试值+1,因为train_res_list使用yixiang_list初始化,因此两者下标顺序相同
+                if predict_key == correct_key:
+                    #准确值+1
+                    train_res_list[idx].add_correct_times()
+                    # print(train_res_list[idx].correct_times)
+            except:
+                #没有见过这个字
+                pass
+
+    return train_res_list
+
+def get_accuracy(train_res_list):
+    train_times_list = [2, 3, 4, 5, 6, 7, 8, 9, 10]
+    accuracy_list = []
+    for train_times in train_times_list:
+        total_test_times,total_correct_times = 0,0
+        cnt = 0
+        for i in range(len(train_res_list)):
+            # print(train_res_list[i].correct_times)
+            if train_res_list[i].train_times >= train_times:
+                total_test_times += train_res_list[i].test_times
+                total_correct_times += train_res_list[i].correct_times
+            cnt += 1
+            if cnt % 100 == 0:
+                print("train times {}, {} train result is completed!".format(train_times,cnt))
+        accuracy_list.append(total_correct_times / total_test_times)
+        print("The total correct times is: ",total_correct_times)
+        print("The total test times is: ",total_test_times)
+
+    return accuracy_list
+
+if __name__ == '__main__':
+    yixiang_list = compute_data()
+    train_res_list = test(yixiang_list)
+    accuracy_list = get_accuracy(train_res_list)
+    for train_times in range(len(accuracy_list)):
+        print("Then train times is: {}, The accuracy is: {}".format(train_times+2,accuracy_list[train_times]))
